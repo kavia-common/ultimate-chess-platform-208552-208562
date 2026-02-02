@@ -519,7 +519,7 @@ export default function ChessPage({ theme, onToggleTheme }: Props) {
                 fen={game.fen}
                 orientation={mode === "multiplayer" && yourColor ? yourColor : orientation}
                 selected={selected}
-                legalTargets={legalTargets}
+                legalMoves={legalMoves}
                 lastMove={game.lastMove}
                 checkSquare={game.checkKingSquare}
                 onSquareClick={onSquareClick}

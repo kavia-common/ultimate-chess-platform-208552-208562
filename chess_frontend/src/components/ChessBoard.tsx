@@ -6,7 +6,13 @@ type Props = {
   fen: string;
   orientation: Color; // 'w' = white at bottom, 'b' = black at bottom
   selected: Square | null;
-  legalTargets: Set<Square>;
+  /**
+   * Legal moves for the currently selected square.
+   * We pass verbose moves (not just targets) so the board can render:
+   * - quiet-move indicators vs capture indicators
+   * - future extensions (e.g., en-passant/castle styling)
+   */
+  legalMoves: Move[];
   lastMove: { from: Square; to: Square } | null;
   checkSquare: Square | null;
   onSquareClick: (sq: Square) => void;
@@ -29,7 +35,7 @@ export default function ChessBoard({
   fen,
   orientation,
   selected,
-  legalTargets,
+  legalMoves,
   lastMove,
   checkSquare,
   onSquareClick
@@ -37,6 +43,16 @@ export default function ChessBoard({
   /** Renders a clickable 8x8 chess board driven by FEN. */
   const chess = new Chess(fen);
   const board = chess.board(); // 8x8, top to bottom (8->1)
+
+  // Build quick lookup tables so per-square rendering is O(1).
+  const legalQuietTargets = new Set<Square>();
+  const legalCaptureTargets = new Set<Square>();
+
+  for (const m of legalMoves) {
+    // chess.js uses `captured` to indicate captures (including en-passant).
+    if (typeof (m as any).captured === "string") legalCaptureTargets.add(m.to);
+    else legalQuietTargets.add(m.to);
+  }
 
   const ranks = [...Array(8)].map((_, i) => i);
   const files = [...Array(8)].map((_, i) => i);
@@ -75,26 +91,31 @@ export default function ChessBoard({
                 : "bg-[var(--board-dark)]";
 
             const isSelected = selected === sq;
-            const isTarget = legalTargets.has(sq);
+
+            const isQuietTarget = legalQuietTargets.has(sq);
+            const isCaptureTarget = legalCaptureTargets.has(sq);
+            const isAnyTarget = isQuietTarget || isCaptureTarget;
 
             const isLastFrom = lastMove?.from === sq;
             const isLastTo = lastMove?.to === sq;
             const isCheck = checkSquare === sq;
 
+            // Background overlays: keep them subtle so the target indicators do the heavy lifting.
             const overlay =
               isCheck
                 ? "bg-[var(--check)]"
                 : isLastFrom || isLastTo
                   ? "bg-[var(--lastmove)]"
-                  : isSelected || isTarget
+                  : isSelected
                     ? "bg-[var(--hint)]"
                     : "";
 
+            // Rings: selected square should pop; targets should be present but not overpower.
             const ring =
               isSelected
                 ? "ring-4 ring-[var(--accent)]"
-                : isTarget
-                  ? "ring-2 ring-[var(--accent-2)]"
+                : isAnyTarget
+                  ? "ring-1 ring-[var(--accent)]/30"
                   : "";
 
             const pieceColor = piece?.color ?? "w";
@@ -121,6 +142,23 @@ export default function ChessBoard({
                 role="gridcell"
                 aria-label={aria}
               >
+                {/* Selected-square glow (kept separate from overlay/ring so it stays visible). */}
+                {isSelected ? (
+                  <span className="pointer-events-none absolute inset-0 bg-[var(--accent)]/10" />
+                ) : null}
+
+                {/* Legal move indicators:
+                    - Quiet move: filled dot
+                    - Capture move: hollow ring marker (more intuitive for captures)
+                */}
+                {isQuietTarget ? (
+                  <span className="pointer-events-none absolute h-3 w-3 rounded-full bg-[var(--accent)]/55" />
+                ) : null}
+
+                {isCaptureTarget ? (
+                  <span className="pointer-events-none absolute inset-2 rounded-full border-2 border-[var(--danger)]/70" />
+                ) : null}
+
                 {piece ? (
                   <span
                     className={[
@@ -137,10 +175,6 @@ export default function ChessBoard({
                       className="h-11 w-11 sm:h-12 sm:w-12"
                     />
                   </span>
-                ) : null}
-
-                {isTarget && !piece ? (
-                  <span className="absolute h-3 w-3 rounded-full bg-[var(--accent-2)]/70" />
                 ) : null}
               </button>
             );
