@@ -47,7 +47,18 @@ export default function ChessBoard({
   return (
     <div className="retro-border retro-glow rounded-2xl bg-[var(--surface)] p-3">
       <div
-        className="grid aspect-square w-full max-w-[560px] grid-cols-8 overflow-hidden rounded-xl retro-border"
+        className={[
+          // Responsive sizing:
+          // - `w-full` keeps it fluid on small screens
+          // - `max-w-[640px]` makes it larger on desktop than before (560px -> 640px)
+          // - `lg:max-w-[720px]` gives an additional bump on large screens
+          // - `min()`/`clamp()`-style behavior is approximated via breakpoints + max-w
+          // Layout safety:
+          // - In the page grid, the board column is `minmax(0, 1fr)` and the side panel is fixed (360px),
+          //   so increasing max width won't break the panel; instead the board will fill available space up to these caps.
+          "grid aspect-square w-full grid-cols-8 overflow-hidden rounded-xl retro-border",
+          "max-w-[640px] lg:max-w-[720px]"
+        ].join(" ")}
         role="grid"
         aria-label="Chess board"
       >
@@ -113,7 +124,8 @@ export default function ChessBoard({
                 {piece ? (
                   <span
                     className={[
-                      "animate-piece-pop inline-flex h-10 w-10 items-center justify-center",
+                      // Scale pieces a bit up on larger screens to better fill the (now larger) squares.
+                      "animate-piece-pop inline-flex h-11 w-11 items-center justify-center sm:h-12 sm:w-12",
                       pieceColor === "w"
                         ? "text-slate-50 drop-shadow-[0_6px_10px_rgba(0,0,0,0.35)]"
                         : "text-slate-900 drop-shadow-[0_6px_10px_rgba(0,0,0,0.25)]"
@@ -122,7 +134,7 @@ export default function ChessBoard({
                     <ChessPieceIcon
                       type={pieceType as Move["piece"]}
                       color={pieceColor}
-                      className="h-10 w-10"
+                      className="h-11 w-11 sm:h-12 sm:w-12"
                     />
                   </span>
                 ) : null}
