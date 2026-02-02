@@ -44,14 +44,13 @@ export default function ChessBoard({
   const chess = new Chess(fen);
   const board = chess.board(); // 8x8, top to bottom (8->1)
 
-  // Build quick lookup tables so per-square rendering is O(1).
-  const legalQuietTargets = new Set<Square>();
-  const legalCaptureTargets = new Set<Square>();
+  // Build quick lookup table so per-square rendering is O(1).
+  // We intentionally do NOT distinguish between quiet/capture targets for highlighting:
+  // user preference is to show all legal moves as simple dots (no capture rings/indicators).
+  const legalTargets = new Set<Square>();
 
   for (const m of legalMoves) {
-    // chess.js uses `captured` to indicate captures (including en-passant).
-    if (typeof (m as any).captured === "string") legalCaptureTargets.add(m.to);
-    else legalQuietTargets.add(m.to);
+    legalTargets.add(m.to);
   }
 
   const ranks = [...Array(8)].map((_, i) => i);
@@ -92,9 +91,7 @@ export default function ChessBoard({
 
             const isSelected = selected === sq;
 
-            const isQuietTarget = legalQuietTargets.has(sq);
-            const isCaptureTarget = legalCaptureTargets.has(sq);
-            const isAnyTarget = isQuietTarget || isCaptureTarget;
+            const isTarget = legalTargets.has(sq);
 
             const isLastFrom = lastMove?.from === sq;
             const isLastTo = lastMove?.to === sq;
@@ -110,13 +107,8 @@ export default function ChessBoard({
                     ? "bg-[var(--hint)]"
                     : "";
 
-            // Rings: selected square should pop; targets should be present but not overpower.
-            const ring =
-              isSelected
-                ? "ring-4 ring-[var(--accent)]"
-                : isAnyTarget
-                  ? "ring-1 ring-[var(--accent)]/30"
-                  : "";
+            // Rings: selected square should pop. Targets use dots only (no rings).
+            const ring = isSelected ? "ring-4 ring-[var(--accent)]" : "";
 
             const pieceColor = piece?.color ?? "w";
             const pieceType = piece?.type ?? "p";
@@ -147,21 +139,24 @@ export default function ChessBoard({
                   <span className="pointer-events-none absolute inset-0 bg-[var(--accent)]/10" />
                 ) : null}
 
-                {/* Legal move indicators:
-                    - Quiet move: filled dot
-                    - Capture move: hollow ring marker (more intuitive for captures)
-                */}
-                {isQuietTarget ? (
-                  <span className="pointer-events-none absolute h-3 w-3 rounded-full bg-[var(--accent)]/55" />
-                ) : null}
-
-                {isCaptureTarget ? (
-                  <span className="pointer-events-none absolute inset-2 rounded-full border-2 border-[var(--danger)]/70" />
+                {/* Legal move indicators: always show dots (no capture rings/other indicators). */}
+                {isTarget ? (
+                  <span
+                    className={[
+                      "pointer-events-none absolute rounded-full",
+                      // Slightly larger + stronger alpha so it remains visible even on last-move/check overlays.
+                      "h-3.5 w-3.5 bg-[var(--accent)]/65",
+                      // Ensure dot is above overlays but below the piece.
+                      "z-10"
+                    ].join(" ")}
+                  />
                 ) : null}
 
                 {piece ? (
                   <span
                     className={[
+                      // Ensure pieces sit above move dots.
+                      "relative z-20",
                       // Scale pieces a bit up on larger screens to better fill the (now larger) squares.
                       "animate-piece-pop inline-flex h-11 w-11 items-center justify-center sm:h-12 sm:w-12",
                       pieceColor === "w"
