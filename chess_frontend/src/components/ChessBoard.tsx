@@ -97,18 +97,18 @@ export default function ChessBoard({
             const isLastTo = lastMove?.to === sq;
             const isCheck = checkSquare === sq;
 
-            // Background overlays: keep them subtle so the target indicators do the heavy lifting.
+            // Background overlays:
+            // - Keep last move + check highlights intact
+            // - Do NOT apply any special background to the selected square (user wants dots only)
             const overlay =
               isCheck
                 ? "bg-[var(--check)]"
                 : isLastFrom || isLastTo
                   ? "bg-[var(--lastmove)]"
-                  : isSelected
-                    ? "bg-[var(--hint)]"
-                    : "";
+                  : "";
 
-            // Rings: selected square should pop. Targets use dots only (no rings).
-            const ring = isSelected ? "ring-4 ring-[var(--accent)]" : "";
+            // Do NOT show a ring/box on the selected square.
+            const ring = "";
 
             const pieceColor = piece?.color ?? "w";
             const pieceType = piece?.type ?? "p";
@@ -134,11 +134,6 @@ export default function ChessBoard({
                 role="gridcell"
                 aria-label={aria}
               >
-                {/* Selected-square glow (kept separate from overlay/ring so it stays visible). */}
-                {isSelected ? (
-                  <span className="pointer-events-none absolute inset-0 bg-[var(--accent)]/10" />
-                ) : null}
-
                 {/* Legal move indicators: always show dots (no capture rings/other indicators). */}
                 {isTarget ? (
                   <span
