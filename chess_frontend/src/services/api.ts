@@ -9,6 +9,14 @@ export type SaveGamePayload = {
 export type SaveGameResponse = { id: string };
 export type LoadGameResponse = { fen: string; pgn?: string };
 
+async function readJsonSafe(res: Response): Promise<unknown> {
+  try {
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
 // PUBLIC_INTERFACE
 export async function healthCheck(): Promise<
   | { ok: true; status: unknown }
@@ -16,7 +24,7 @@ export async function healthCheck(): Promise<
 > {
   /**
    * Checks backend connectivity.
-   * Note: current backend OpenAPI only documents GET / (health).
+   * Backend: GET /
    */
   const base = getApiBaseUrl();
   const url = `${base}/`;
@@ -24,7 +32,7 @@ export async function healthCheck(): Promise<
   try {
     const res = await fetch(url, { method: "GET" });
     if (!res.ok) return { ok: false, error: `Health check failed (${res.status})` };
-    return { ok: true, status: await res.json() };
+    return { ok: true, status: await readJsonSafe(res) };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : "Network error" };
   }
@@ -38,32 +46,46 @@ export async function saveGameToServer(
   | { ok: false; error: string; status?: number }
 > {
   /**
-   * Attempts to save the game to the backend.
-   * Expected future endpoint (not present yet): POST /games
+   * Saves a snapshot by creating a new server game initialized from the given FEN.
+   *
+   * Backend: POST /api/games
+   * Body: { initialFen: string, creatorName?, creatorColor?, timeControl? }
+   * Response: { gameId, player, state }
    */
   const base = getApiBaseUrl();
-  const url = `${base}/games`;
+  const url = `${base}/api/games`;
 
   try {
     const res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
+      // We keep payload shape on the frontend, but map it to backend contract here.
+      body: JSON.stringify({
+        creatorName: "Saved Game",
+        creatorColor: "w",
+        initialFen: payload.fen
+      })
     });
 
     if (!res.ok) {
+      const body = await readJsonSafe(res);
       return {
         ok: false,
         status: res.status,
         error:
-          res.status === 404
-            ? "Save endpoint not implemented on backend yet (POST /games)."
+          typeof body === "object" && body && "message" in body
+            ? String((body as any).message)
             : `Save failed (${res.status})`
       };
     }
 
-    const data = (await res.json()) as SaveGameResponse;
-    return { ok: true, data };
+    const data = (await readJsonSafe(res)) as any;
+    const id = String(data?.gameId ?? "");
+    if (!id) {
+      return { ok: false, error: "Unexpected server response (missing gameId)" };
+    }
+
+    return { ok: true, data: { id } };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : "Network error" };
   }
@@ -77,28 +99,34 @@ export async function loadGameFromServer(
   | { ok: false; error: string; status?: number }
 > {
   /**
-   * Attempts to load the game from the backend.
-   * Expected future endpoint (not present yet): GET /games/:id
+   * Loads a game snapshot by fetching its current server state.
+   *
+   * Backend: GET /api/games/:gameId
+   * Response: GameState (includes fen, pgn)
    */
   const base = getApiBaseUrl();
-  const url = `${base}/games/${encodeURIComponent(id)}`;
+  const url = `${base}/api/games/${encodeURIComponent(id)}`;
 
   try {
     const res = await fetch(url, { method: "GET" });
 
     if (!res.ok) {
+      const body = await readJsonSafe(res);
       return {
         ok: false,
         status: res.status,
         error:
-          res.status === 404
-            ? "Load endpoint not implemented on backend yet (GET /games/:id)."
+          typeof body === "object" && body && "message" in body
+            ? String((body as any).message)
             : `Load failed (${res.status})`
       };
     }
 
-    const data = (await res.json()) as LoadGameResponse;
-    return { ok: true, data };
+    const data = (await readJsonSafe(res)) as any;
+    const fen = String(data?.fen ?? "");
+    if (!fen) return { ok: false, error: "Unexpected server response (missing fen)" };
+
+    return { ok: true, data: { fen, pgn: typeof data?.pgn === "string" ? data.pgn : undefined } };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : "Network error" };
   }

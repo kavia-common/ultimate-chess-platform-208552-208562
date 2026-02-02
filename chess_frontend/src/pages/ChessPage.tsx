@@ -6,7 +6,11 @@ import MoveHistory from "../components/MoveHistory";
 import Panel from "../components/Panel";
 import PromotionModal from "../components/PromotionModal";
 import RetroButton from "../components/RetroButton";
-import { useChessGame, type MoveInput, type PromotionPiece } from "../hooks/useChessGame";
+import {
+  useChessGame,
+  type MoveInput,
+  type PromotionPiece
+} from "../hooks/useChessGame";
 import { useMultiplayer } from "../hooks/useMultiplayer";
 import { getBestMoveFromFen } from "../utils/chessAi";
 import { colorLabel } from "../utils/chessFormat";
@@ -19,7 +23,12 @@ type Props = {
   onToggleTheme: () => void;
 };
 
-function canPickUpPieceForTurn(pieceColor: Color, turn: Color, mode: GameMode, yourColor: Color | null) {
+function canPickUpPieceForTurn(
+  pieceColor: Color,
+  turn: Color,
+  mode: GameMode,
+  yourColor: Color | null
+) {
   if (mode === "multiplayer") {
     if (!yourColor) return false;
     return pieceColor === yourColor && turn === yourColor;
@@ -56,10 +65,13 @@ export default function ChessPage({ theme, onToggleTheme }: Props) {
   const multiplayer = useMultiplayer();
   const yourColor = multiplayer.yourColor;
 
-  const legalTargets = useMemo(() => new Set(legalMoves.map((m) => m.to)), [legalMoves]);
+  const legalTargets = useMemo(
+    () => new Set(legalMoves.map((m) => m.to)),
+    [legalMoves]
+  );
 
   useEffect(() => {
-    // Reset selection when turn changes / state changes.
+    // Reset selection when state changes.
     setSelected(null);
     setLegalMoves([]);
   }, [game.fen]);
@@ -67,16 +79,19 @@ export default function ChessPage({ theme, onToggleTheme }: Props) {
   useEffect(() => {
     if (mode !== "multiplayer") return;
     multiplayer.connect();
+    // Local clock is not authoritative in multiplayer; keep it paused.
+    game.pauseClock();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, multiplayer]);
 
   useEffect(() => {
     if (mode !== "multiplayer") return;
-    if (!multiplayer.latestFen) return;
-    const res = game.loadFromFen(multiplayer.latestFen);
-    if (!res.ok) {
-      setMessage(`Failed to sync multiplayer state: ${res.error}`);
-    }
-  }, [mode, multiplayer.latestFen, game]);
+    const fen = multiplayer.latestState?.fen;
+    if (!fen) return;
+
+    const res = game.loadFromFen(fen);
+    if (!res.ok) setMessage(`Failed to sync multiplayer state: ${res.error}`);
+  }, [mode, multiplayer.latestState?.fen, game]);
 
   useEffect(() => {
     if (mode !== "ai") return;
@@ -98,21 +113,28 @@ export default function ChessPage({ theme, onToggleTheme }: Props) {
   }, [mode, game.fen, game.turn, game.status.kind, game]);
 
   const statusText = useMemo(() => {
+    // Prefer backend reason when in multiplayer (e.g., timeout is not detectable via chess.js).
+    if (mode === "multiplayer" && multiplayer.latestState?.status?.state === "finished") {
+      const st = multiplayer.latestState.status;
+      if (st.reason === "timeout") {
+        return `TIMEOUT — ${st.winner ? `${colorLabel(st.winner as Color)} wins` : "DRAW"}`;
+      }
+    }
+
     if (game.status.kind === "checkmate") {
       return `CHECKMATE — ${colorLabel(game.status.winner)} wins`;
     }
     if (game.status.kind === "stalemate") return "STALEMATE";
     if (game.status.kind === "draw") return "DRAW";
     return game.status.inCheck ? "CHECK" : "PLAYING";
-  }, [game.status]);
+  }, [game.status, mode, multiplayer.latestState?.status]);
 
   const onSquareClick = useCallback(
     (sq: Square) => {
       setMessage(null);
 
-      // In multiplayer, if not connected/room, allow board inspection but not moves.
-      if (mode === "multiplayer" && !multiplayer.roomId) {
-        setMessage("Join a room to play multiplayer.");
+      if (mode === "multiplayer" && !multiplayer.gameId) {
+        setMessage("Create or join a multiplayer game to play.");
       }
 
       // Determine if clicking a target square to move.
@@ -121,10 +143,13 @@ export default function ChessPage({ theme, onToggleTheme }: Props) {
 
         if (candidates.length > 0) {
           // Promotion: chess.js provides multiple candidate moves for promotion with different 'promotion'.
-          const promoCandidates = candidates.filter((m) => typeof m.promotion === "string");
+          const promoCandidates = candidates.filter(
+            (m) => typeof m.promotion === "string"
+          );
 
           if (promoCandidates.length > 1) {
-            const pieceColor = derivePieceColorAtSquare(game.fen, selected) ?? game.turn;
+            const pieceColor =
+              derivePieceColorAtSquare(game.fen, selected) ?? game.turn;
             setPendingPromotion({ from: selected, to: sq, color: pieceColor });
             setPromotionOpen(true);
             return;
@@ -137,13 +162,17 @@ export default function ChessPage({ theme, onToggleTheme }: Props) {
               (candidates[0]?.promotion as PromotionPiece | undefined) ?? undefined
           };
 
-          const result = game.makeMove(move);
-          if (!result.ok) {
-            setMessage(result.error);
-            return;
-          }
+          if (mode === "multiplayer") {
+            const playerOk =
+              multiplayer.participant?.role === "player" &&
+              Boolean(multiplayer.participant?.playerId) &&
+              Boolean(multiplayer.gameId);
 
-          if (mode === "multiplayer" && multiplayer.roomId) {
+            if (!playerOk) {
+              setMessage("You are not a player in this game (spectator / not joined).");
+              return;
+            }
+
             multiplayer
               .sendMove({
                 from: move.from,
@@ -153,11 +182,21 @@ export default function ChessPage({ theme, onToggleTheme }: Props) {
               .then((ack) => {
                 if (!ack.ok) {
                   setMessage(ack.message ?? "Multiplayer move rejected.");
+                  return;
+                }
+                if (ack.state?.fen) {
+                  game.loadFromFen(ack.state.fen);
                 }
               })
               .catch((e) =>
                 setMessage(e instanceof Error ? e.message : "Failed to send move")
               );
+          } else {
+            const result = game.makeMove(move);
+            if (!result.ok) {
+              setMessage(result.error);
+              return;
+            }
           }
 
           return;
@@ -188,9 +227,7 @@ export default function ChessPage({ theme, onToggleTheme }: Props) {
 
       if (!canPickUpPieceForTurn(clickedColor, game.turn, mode, yourColor)) {
         setMessage(
-          mode === "multiplayer"
-            ? "Not your turn / not your piece."
-            : "Not your turn."
+          mode === "multiplayer" ? "Not your turn / not your piece." : "Not your turn."
         );
         return;
       }
@@ -211,15 +248,19 @@ export default function ChessPage({ theme, onToggleTheme }: Props) {
         promotion: p
       };
 
-      const result = game.makeMove(move);
-      if (!result.ok) {
-        setMessage(result.error);
-      } else if (mode === "multiplayer" && multiplayer.roomId) {
-        multiplayer.sendMove({
-          from: move.from,
-          to: move.to,
-          promotion: move.promotion
-        });
+      if (mode === "multiplayer") {
+        multiplayer
+          .sendMove({ from: move.from, to: move.to, promotion: move.promotion })
+          .then((ack) => {
+            if (!ack.ok) setMessage(ack.message ?? "Promotion move rejected.");
+            else if (ack.state?.fen) game.loadFromFen(ack.state.fen);
+          })
+          .catch((e) =>
+            setMessage(e instanceof Error ? e.message : "Failed to send promotion")
+          );
+      } else {
+        const result = game.makeMove(move);
+        if (!result.ok) setMessage(result.error);
       }
 
       setPromotionOpen(false);
@@ -336,25 +377,57 @@ export default function ChessPage({ theme, onToggleTheme }: Props) {
     else setMessage("Loaded from server.");
   }, [serverGameId, game]);
 
-  const [roomIdInput, setRoomIdInput] = useState("");
+  // Multiplayer panel state
+  const [mpName, setMpName] = useState("");
+  const [mpGameIdInput, setMpGameIdInput] = useState("");
   const [colorPref, setColorPref] = useState<"random" | "w" | "b">("random");
 
-  const onJoinRoom = useCallback(async () => {
-    const roomId = roomIdInput.trim();
-    if (!roomId) {
-      setMessage("Enter a room id.");
+  const onCreateMultiplayerGame = useCallback(async () => {
+    const ack = await multiplayer.createGame({
+      name: mpName.trim() || undefined,
+      colorPreference: colorPref
+    });
+
+    if (!ack.ok) {
+      setMessage(ack.message ?? "Failed to create game.");
       return;
     }
 
-    const ack = await multiplayer.joinRoom(roomId, colorPref);
-    if (!ack.ok) setMessage(ack.message ?? "Failed to join room.");
-    else setMessage(`Joined room: ${roomId}`);
-  }, [roomIdInput, colorPref, multiplayer]);
+    if (ack.gameId) setMpGameIdInput(ack.gameId);
+    setMessage(`Created game: ${ack.gameId ?? "(unknown)"}`);
+  }, [multiplayer, mpName, colorPref]);
 
-  const onLeaveRoom = useCallback(() => {
-    multiplayer.leaveRoom();
-    setMessage("Left room.");
+  const onJoinMultiplayerGame = useCallback(async () => {
+    const gameId = mpGameIdInput.trim();
+    if (!gameId) {
+      setMessage("Enter a game id.");
+      return;
+    }
+
+    const ack = await multiplayer.joinGame({
+      gameId,
+      name: mpName.trim() || undefined,
+      colorPreference: colorPref
+    });
+
+    if (!ack.ok) setMessage(ack.message ?? "Failed to join game.");
+    else setMessage(`Joined game: ${ack.gameId ?? gameId}`);
+  }, [mpGameIdInput, mpName, colorPref, multiplayer]);
+
+  const onLeaveMultiplayerGame = useCallback(() => {
+    multiplayer.leaveGame();
+    setMessage("Left multiplayer game.");
   }, [multiplayer]);
+
+  const effectiveClocks = useMemo(() => {
+    if (mode !== "multiplayer") return null;
+    return multiplayer.latestState?.clocks ?? null;
+  }, [mode, multiplayer.latestState?.clocks]);
+
+  const effectiveStatusState = useMemo(() => {
+    if (mode !== "multiplayer") return null;
+    return multiplayer.latestState?.status?.state ?? null;
+  }, [mode, multiplayer.latestState?.status?.state]);
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-6">
@@ -429,8 +502,7 @@ export default function ChessPage({ theme, onToggleTheme }: Props) {
                   <span className="font-retro text-[10px]">
                     {colorLabel(game.turn).toUpperCase()}
                   </span>{" "}
-                  •{" "}
-                  <span className="font-retro text-[10px]">{statusText}</span>
+                  • <span className="font-retro text-[10px]">{statusText}</span>
                 </div>
 
                 <div className="flex flex-wrap gap-2">
@@ -445,9 +517,7 @@ export default function ChessPage({ theme, onToggleTheme }: Props) {
 
               <ChessBoard
                 fen={game.fen}
-                orientation={
-                  mode === "multiplayer" && yourColor ? yourColor : orientation
-                }
+                orientation={mode === "multiplayer" && yourColor ? yourColor : orientation}
                 selected={selected}
                 legalTargets={legalTargets}
                 lastMove={game.lastMove}
@@ -463,13 +533,37 @@ export default function ChessPage({ theme, onToggleTheme }: Props) {
             <div className="grid grid-cols-2 gap-3">
               <Clock
                 color="w"
-                ms={game.clock.whiteMs}
-                active={game.clock.running && game.turn === "w" && game.status.kind === "playing"}
+                ms={effectiveClocks ? effectiveClocks.wRemainingMs : game.clock.whiteMs}
+                active={
+                  effectiveClocks
+                    ? Boolean(
+                        effectiveClocks.running &&
+                          effectiveClocks.activeColor === "w" &&
+                          effectiveStatusState === "active"
+                      )
+                    : Boolean(
+                        game.clock.running &&
+                          game.turn === "w" &&
+                          game.status.kind === "playing"
+                      )
+                }
               />
               <Clock
                 color="b"
-                ms={game.clock.blackMs}
-                active={game.clock.running && game.turn === "b" && game.status.kind === "playing"}
+                ms={effectiveClocks ? effectiveClocks.bRemainingMs : game.clock.blackMs}
+                active={
+                  effectiveClocks
+                    ? Boolean(
+                        effectiveClocks.running &&
+                          effectiveClocks.activeColor === "b" &&
+                          effectiveStatusState === "active"
+                      )
+                    : Boolean(
+                        game.clock.running &&
+                          game.turn === "b" &&
+                          game.status.kind === "playing"
+                      )
+                }
               />
             </div>
 
@@ -478,6 +572,7 @@ export default function ChessPage({ theme, onToggleTheme }: Props) {
                 size="sm"
                 variant="secondary"
                 onClick={() => game.resetClocks(1 * 60 * 1000)}
+                disabled={mode === "multiplayer"}
               >
                 1 MIN
               </RetroButton>
@@ -485,6 +580,7 @@ export default function ChessPage({ theme, onToggleTheme }: Props) {
                 size="sm"
                 variant="secondary"
                 onClick={() => game.resetClocks(3 * 60 * 1000)}
+                disabled={mode === "multiplayer"}
               >
                 3 MIN
               </RetroButton>
@@ -492,6 +588,7 @@ export default function ChessPage({ theme, onToggleTheme }: Props) {
                 size="sm"
                 variant="secondary"
                 onClick={() => game.resetClocks(5 * 60 * 1000)}
+                disabled={mode === "multiplayer"}
               >
                 5 MIN
               </RetroButton>
@@ -499,16 +596,27 @@ export default function ChessPage({ theme, onToggleTheme }: Props) {
                 size="sm"
                 variant="secondary"
                 onClick={() => game.resetClocks(10 * 60 * 1000)}
+                disabled={mode === "multiplayer"}
               >
                 10 MIN
               </RetroButton>
             </div>
 
             <div className="mt-3 flex flex-wrap gap-2">
-              <RetroButton size="sm" variant="primary" onClick={game.startClock}>
+              <RetroButton
+                size="sm"
+                variant="primary"
+                onClick={game.startClock}
+                disabled={mode === "multiplayer"}
+              >
                 START
               </RetroButton>
-              <RetroButton size="sm" variant="secondary" onClick={game.pauseClock}>
+              <RetroButton
+                size="sm"
+                variant="secondary"
+                onClick={game.pauseClock}
+                disabled={mode === "multiplayer"}
+              >
                 PAUSE
               </RetroButton>
             </div>
@@ -522,10 +630,16 @@ export default function ChessPage({ theme, onToggleTheme }: Props) {
               <RetroButton size="sm" onClick={onRedo}>
                 REDO
               </RetroButton>
-              <RetroButton size="sm" onClick={() => navigator.clipboard.writeText(game.exportFen())}>
+              <RetroButton
+                size="sm"
+                onClick={() => navigator.clipboard.writeText(game.exportFen())}
+              >
                 COPY FEN
               </RetroButton>
-              <RetroButton size="sm" onClick={() => navigator.clipboard.writeText(game.exportPgn())}>
+              <RetroButton
+                size="sm"
+                onClick={() => navigator.clipboard.writeText(game.exportPgn())}
+              >
                 COPY PGN
               </RetroButton>
             </div>
@@ -541,7 +655,7 @@ export default function ChessPage({ theme, onToggleTheme }: Props) {
 
             <div className="mt-3">
               <div className="mb-2 text-xs text-[var(--muted)]">
-                Server save/load (backend endpoints may not exist yet):
+                Server save/load (REST):
               </div>
               <div className="flex gap-2">
                 <input
@@ -562,7 +676,10 @@ export default function ChessPage({ theme, onToggleTheme }: Props) {
                   PING API
                 </RetroButton>
                 <span className="self-center text-xs text-[var(--muted)]">
-                  API: <span className="font-retro text-[10px]">{serverStatus.toUpperCase()}</span>
+                  API:{" "}
+                  <span className="font-retro text-[10px]">
+                    {serverStatus.toUpperCase()}
+                  </span>
                 </span>
               </div>
             </div>
@@ -578,12 +695,12 @@ export default function ChessPage({ theme, onToggleTheme }: Props) {
               <span className="font-retro text-[10px]">
                 {multiplayer.connection.kind.toUpperCase()}
               </span>
-              {multiplayer.yourColor ? (
+              {yourColor ? (
                 <>
                   {" "}
                   • You:{" "}
                   <span className="font-retro text-[10px]">
-                    {colorLabel(multiplayer.yourColor as Color).toUpperCase()}
+                    {colorLabel(yourColor as Color).toUpperCase()}
                   </span>
                 </>
               ) : null}
@@ -591,16 +708,26 @@ export default function ChessPage({ theme, onToggleTheme }: Props) {
 
             <div className="mt-3 grid gap-2">
               <input
-                value={roomIdInput}
-                onChange={(e) => setRoomIdInput(e.target.value)}
-                placeholder="room id (e.g. neon-123)"
+                value={mpName}
+                onChange={(e) => setMpName(e.target.value)}
+                placeholder="name (optional)"
                 className="retro-border rounded-lg bg-[var(--surface-2)] px-3 py-2 text-sm"
               />
+
+              <input
+                value={mpGameIdInput}
+                onChange={(e) => setMpGameIdInput(e.target.value)}
+                placeholder="game id (or create one)"
+                className="retro-border rounded-lg bg-[var(--surface-2)] px-3 py-2 text-sm"
+              />
+
               <div className="flex items-center gap-2">
                 <label className="text-xs text-[var(--muted)]">Color</label>
                 <select
                   value={colorPref}
-                  onChange={(e) => setColorPref(e.target.value as "random" | "w" | "b")}
+                  onChange={(e) =>
+                    setColorPref(e.target.value as "random" | "w" | "b")
+                  }
                   className="retro-border rounded-lg bg-[var(--surface-2)] px-3 py-2 text-sm"
                 >
                   <option value="random">Random</option>
@@ -610,19 +737,31 @@ export default function ChessPage({ theme, onToggleTheme }: Props) {
               </div>
 
               <div className="flex flex-wrap gap-2">
-                <RetroButton size="sm" variant="primary" onClick={onJoinRoom}>
+                <RetroButton size="sm" variant="primary" onClick={onCreateMultiplayerGame}>
+                  CREATE
+                </RetroButton>
+                <RetroButton size="sm" variant="secondary" onClick={onJoinMultiplayerGame}>
                   JOIN
                 </RetroButton>
-                <RetroButton size="sm" variant="secondary" onClick={onLeaveRoom} disabled={!multiplayer.roomId}>
+                <RetroButton
+                  size="sm"
+                  variant="secondary"
+                  onClick={onLeaveMultiplayerGame}
+                  disabled={!multiplayer.gameId}
+                >
                   LEAVE
                 </RetroButton>
               </div>
 
               <div className="text-xs text-[var(--muted)]">
-                Room:{" "}
+                Game:{" "}
                 <span className="font-retro text-[10px]">
-                  {multiplayer.roomId ? multiplayer.roomId.toUpperCase() : "NONE"}
+                  {multiplayer.gameId ? multiplayer.gameId.toUpperCase() : "NONE"}
                 </span>
+              </div>
+
+              <div className="text-xs text-[var(--muted)]">
+                Tip: Your player token is stored locally per game id (supports reconnect).
               </div>
             </div>
           </Panel>
